@@ -1,0 +1,4 @@
+Deployment completed successfully!
+SpeakerManager:     0xBE8311aF3F7BEE06f907F76CC888335A7c9A94AC
+SeminarManager:     0x86bdE9029D9F99e4eee9E79433065affF2B4c719
+SeminarRandomizer:  0x7987FCC280EeA9B170c1D1D7154CeeFD1DB79F49

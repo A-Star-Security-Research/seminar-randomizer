@@ -8,25 +8,29 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant TEAM_MEMBER = keccak256("TEAM_MEMBER");
 
-    enum ParticipantType { INTERN, FULLTIME }
-    enum SessionStatus { PENDING, RACING, COMPLETED, PAUSED, CANCELLED }
+    enum ParticipantType {
+        INTERN,
+        FULLTIME
+    }
+    enum SessionStatus {
+        PENDING,
+        RACING,
+        COMPLETED,
+        PAUSED,
+        CANCELLED
+    }
 
     struct RaceSession {
         uint256 sessionId;
         SessionStatus status;
         uint256 createdAt;
-
         uint256 targetWeekStart;
         uint256 preparationWeeks;
-
         address[] internPool;
         address[] fulltimePool;
-
         address selectedMentor;
         address[] selectedInterns;
-
         uint256 currentRound;
-
         string seminarTitle;
         string seminarDescription;
         uint256 seminarDate;
@@ -44,16 +48,37 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     mapping(address => uint256) public lastChosenWeek;
     uint256 public defaultPreparationWeeks;
 
-    event RaceSessionCreated(uint256 indexed sessionId, uint256 targetWeekStart, uint256 prepWeeks);
+    event RaceSessionCreated(
+        uint256 indexed sessionId,
+        uint256 targetWeekStart,
+        uint256 prepWeeks
+    );
     event SessionPaused(uint256 indexed sessionId);
     event SessionResumed(uint256 indexed sessionId);
     event SessionCancelled(uint256 indexed sessionId);
-    event RaceResult(uint256 indexed sessionId, uint256 round, address indexed winner, ParticipantType pType);
-    event SessionCompleted(uint256 indexed sessionId, address mentor, address[] interns);
-    event SeminarInfoUpdated(uint256 indexed sessionId, string title, string description);
+    event RaceResult(
+        uint256 indexed sessionId,
+        uint256 round,
+        address indexed winner,
+        ParticipantType pType
+    );
+    event SessionCompleted(
+        uint256 indexed sessionId,
+        address mentor,
+        address[] interns
+    );
+    event SeminarInfoUpdated(
+        uint256 indexed sessionId,
+        string title,
+        string description
+    );
     event SeminarDateUpdated(uint256 indexed sessionId, uint256 date);
     event PreparationWeeksUpdated(uint256 indexed sessionId, uint256 newWeeks);
-    event ParticipantAdded(address indexed participant, string name, ParticipantType pType);
+    event ParticipantAdded(
+        address indexed participant,
+        string name,
+        ParticipantType pType
+    );
     event ParticipantRemoved(address indexed participant);
     event InternPoolUpdated(uint256 count);
     event FulltimePoolUpdated(uint256 count);
@@ -63,7 +88,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         _disableInitializers();
     }
 
-    function initialize(address defaultAdmin) initializer public {
+    function initialize(address defaultAdmin) public initializer {
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
         _grantRole(ADMIN_ROLE, defaultAdmin);
@@ -72,14 +97,24 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     }
 
     modifier onlyAdmin() {
-        require(hasRole(ADMIN_ROLE, msg.sender), "SeminarRandomizer: only admin");
+        require(
+            hasRole(ADMIN_ROLE, msg.sender),
+            "SeminarRandomizer: only admin"
+        );
         _;
     }
 
     // ── Admin Functions — Pool Management ──
 
-    function addParticipant(address _participant, string memory _name, ParticipantType _pType) external onlyAdmin {
-        require(bytes(participantNames[_participant]).length == 0, "Participant already exists");
+    function addParticipant(
+        address _participant,
+        string memory _name,
+        ParticipantType _pType
+    ) external onlyAdmin {
+        require(
+            bytes(participantNames[_participant]).length == 0,
+            "Participant already exists"
+        );
         participantNames[_participant] = _name;
         participantTypes[_participant] = _pType;
 
@@ -95,8 +130,11 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     }
 
     function removeParticipant(address _participant) external onlyAdmin {
-        require(bytes(participantNames[_participant]).length > 0, "Participant does not exist");
-        
+        require(
+            bytes(participantNames[_participant]).length > 0,
+            "Participant does not exist"
+        );
+
         ParticipantType pType = participantTypes[_participant];
         delete participantNames[_participant];
 
@@ -121,14 +159,18 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         emit FulltimePoolUpdated(_newPool.length);
     }
 
-    function getParticipants(ParticipantType _pType) external view returns (address[] memory) {
+    function getParticipants(
+        ParticipantType _pType
+    ) external view returns (address[] memory) {
         if (_pType == ParticipantType.INTERN) return globalInternPool;
         return globalFulltimePool;
     }
 
     // ── Admin Functions — Session Management ──
 
-    function createRaceSession(uint256 targetWeekStart) external onlyAdmin returns (uint256 sessionId) {
+    function createRaceSession(
+        uint256 targetWeekStart
+    ) external onlyAdmin returns (uint256 sessionId) {
         sessionId = nextSessionId++;
 
         RaceSession storage session = sessions[sessionId];
@@ -138,15 +180,35 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         session.targetWeekStart = targetWeekStart;
         session.preparationWeeks = defaultPreparationWeeks;
 
-        session.internPool = _filterCooldownParticipants(globalInternPool, targetWeekStart);
-        session.fulltimePool = _filterCooldownParticipants(globalFulltimePool, targetWeekStart);
+        session.internPool = _filterCooldownParticipants(
+            globalInternPool,
+            targetWeekStart
+        );
+        session.fulltimePool = _filterCooldownParticipants(
+            globalFulltimePool,
+            targetWeekStart
+        );
+
+        require(
+            session.fulltimePool.length >= 1,
+            "Not enough full-time members"
+        );
+
+        require(session.internPool.length >= 3, "Not enough intern members");
 
         sessionList.push(sessionId);
 
-        emit RaceSessionCreated(sessionId, targetWeekStart, session.preparationWeeks);
+        emit RaceSessionCreated(
+            sessionId,
+            targetWeekStart,
+            session.preparationWeeks
+        );
     }
 
-    function updatePreparationWeeks(uint256 sessionId, uint256 _weeks) external onlyAdmin {
+    function updatePreparationWeeks(
+        uint256 sessionId,
+        uint256 _weeks
+    ) external onlyAdmin {
         require(sessions[sessionId].sessionId != 0, "Session does not exist");
         sessions[sessionId].preparationWeeks = _weeks;
         emit PreparationWeeksUpdated(sessionId, _weeks);
@@ -158,8 +220,12 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     function pauseSession(uint256 sessionId) external onlyAdmin {
         RaceSession storage session = sessions[sessionId];
-        require(session.status == SessionStatus.RACING || session.status == SessionStatus.COMPLETED, "Cannot pause in this status");
-        
+        require(
+            session.status == SessionStatus.RACING ||
+                session.status == SessionStatus.COMPLETED,
+            "Cannot pause in this status"
+        );
+
         session.status = SessionStatus.PAUSED;
         emit SessionPaused(sessionId);
     }
@@ -167,7 +233,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     function resumeSession(uint256 sessionId) external onlyAdmin {
         RaceSession storage session = sessions[sessionId];
         require(session.status == SessionStatus.PAUSED, "Not paused");
-        
+
         if (session.currentRound == 4) {
             session.status = SessionStatus.COMPLETED;
         } else if (session.currentRound > 0) {
@@ -175,7 +241,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         } else {
             session.status = SessionStatus.PENDING;
         }
-        
+
         emit SessionResumed(sessionId);
     }
 
@@ -185,12 +251,18 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         // Reset cooldowns
         if (session.selectedMentor != address(0)) {
-            if (lastChosenWeek[session.selectedMentor] == session.targetWeekStart) {
+            if (
+                lastChosenWeek[session.selectedMentor] ==
+                session.targetWeekStart
+            ) {
                 lastChosenWeek[session.selectedMentor] = 0;
             }
         }
         for (uint256 i = 0; i < session.selectedInterns.length; i++) {
-            if (lastChosenWeek[session.selectedInterns[i]] == session.targetWeekStart) {
+            if (
+                lastChosenWeek[session.selectedInterns[i]] ==
+                session.targetWeekStart
+            ) {
                 lastChosenWeek[session.selectedInterns[i]] = 0;
             }
         }
@@ -203,7 +275,11 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     function startNextRace(uint256 sessionId) external onlyAdmin {
         RaceSession storage session = sessions[sessionId];
-        require(session.status == SessionStatus.PENDING || session.status == SessionStatus.RACING, "Invalid status");
+        require(
+            session.status == SessionStatus.PENDING ||
+                session.status == SessionStatus.RACING,
+            "Invalid status"
+        );
         require(session.currentRound < 4, "Race already finished");
 
         if (session.status == SessionStatus.PENDING) {
@@ -217,19 +293,29 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         if (session.currentRound == 1) {
             require(session.fulltimePool.length > 0, "Empty fulltime pool");
-            uint256 randomIndex = _getRandomIndex(sessionId, session.currentRound, session.fulltimePool.length);
+            uint256 randomIndex = _getRandomIndex(
+                sessionId,
+                session.currentRound,
+                session.fulltimePool.length
+            );
             winner = session.fulltimePool[randomIndex];
             session.selectedMentor = winner;
             pType = ParticipantType.FULLTIME;
         } else {
             require(session.internPool.length > 0, "Empty intern pool");
-            uint256 randomIndex = _getRandomIndex(sessionId, session.currentRound, session.internPool.length);
+            uint256 randomIndex = _getRandomIndex(
+                sessionId,
+                session.currentRound,
+                session.internPool.length
+            );
             winner = session.internPool[randomIndex];
             session.selectedInterns.push(winner);
             pType = ParticipantType.INTERN;
 
             // Swap and pop
-            session.internPool[randomIndex] = session.internPool[session.internPool.length - 1];
+            session.internPool[randomIndex] = session.internPool[
+                session.internPool.length - 1
+            ];
             session.internPool.pop();
         }
 
@@ -237,35 +323,50 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         if (session.currentRound == 4) {
             session.status = SessionStatus.COMPLETED;
-            
+
             // Set cooldown
             lastChosenWeek[session.selectedMentor] = session.targetWeekStart;
             for (uint256 i = 0; i < session.selectedInterns.length; i++) {
-                lastChosenWeek[session.selectedInterns[i]] = session.targetWeekStart;
+                lastChosenWeek[session.selectedInterns[i]] = session
+                    .targetWeekStart;
             }
 
-            emit SessionCompleted(sessionId, session.selectedMentor, session.selectedInterns);
+            emit SessionCompleted(
+                sessionId,
+                session.selectedMentor,
+                session.selectedInterns
+            );
         }
     }
 
-    function _getRandomIndex(uint256 sessionId, uint256 round, uint256 poolLength) internal view returns (uint256) {
-        return uint256(
-            keccak256(
-                abi.encodePacked(
-                    block.prevrandao,
-                    block.timestamp,
-                    sessionId,
-                    round
+    function _getRandomIndex(
+        uint256 sessionId,
+        uint256 round,
+        uint256 poolLength
+    ) internal view returns (uint256) {
+        return
+            uint256(
+                keccak256(
+                    abi.encodePacked(
+                        block.prevrandao,
+                        block.timestamp,
+                        sessionId,
+                        round
+                    )
                 )
-            )
-        ) % poolLength;
+            ) % poolLength;
     }
 
-    function _filterCooldownParticipants(address[] memory pool, uint256 targetWeekStart) internal view returns (address[] memory) {
+    function _filterCooldownParticipants(
+        address[] memory pool,
+        uint256 targetWeekStart
+    ) internal view returns (address[] memory) {
         // Count valid
         uint256 validCount = 0;
         uint256 weekDiff = 7 days; // 1 week in seconds
-        uint256 previousWeekStart = targetWeekStart > weekDiff ? targetWeekStart - weekDiff : 0;
+        uint256 previousWeekStart = targetWeekStart > weekDiff
+            ? targetWeekStart - weekDiff
+            : 0;
 
         for (uint256 i = 0; i < pool.length; i++) {
             if (lastChosenWeek[pool[i]] != previousWeekStart) {
@@ -285,7 +386,10 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         return filtered;
     }
 
-    function _removeFromPool(address[] storage pool, address participant) internal {
+    function _removeFromPool(
+        address[] storage pool,
+        address participant
+    ) internal {
         for (uint256 i = 0; i < pool.length; i++) {
             if (pool[i] == participant) {
                 pool[i] = pool[pool.length - 1];
@@ -297,7 +401,11 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     // ── Seminar Info Functions ──
 
-    function updateSeminarInfo(uint256 sessionId, string memory _title, string memory _description) external {
+    function updateSeminarInfo(
+        uint256 sessionId,
+        string memory _title,
+        string memory _description
+    ) external {
         RaceSession storage session = sessions[sessionId];
         require(_isTeamMemberOrAdmin(sessionId, msg.sender), "Not authorized");
         session.seminarTitle = _title;
@@ -309,12 +417,15 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     function updateSeminarDate(uint256 sessionId, uint256 _date) external {
         RaceSession storage session = sessions[sessionId];
         require(_isTeamMemberOrAdmin(sessionId, msg.sender), "Not authorized");
-        
+
         session.seminarDate = _date;
         emit SeminarDateUpdated(sessionId, _date);
     }
 
-    function _isTeamMemberOrAdmin(uint256 sessionId, address user) internal view returns (bool) {
+    function _isTeamMemberOrAdmin(
+        uint256 sessionId,
+        address user
+    ) internal view returns (bool) {
         if (hasRole(ADMIN_ROLE, user)) return true;
 
         RaceSession storage session = sessions[sessionId];
@@ -328,11 +439,15 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     // ── View Functions ──
 
-    function getSession(uint256 sessionId) external view returns (RaceSession memory) {
+    function getSession(
+        uint256 sessionId
+    ) external view returns (RaceSession memory) {
         return sessions[sessionId];
     }
 
-    function getSelectedTeam(uint256 sessionId) external view returns (address mentor, address[] memory interns) {
+    function getSelectedTeam(
+        uint256 sessionId
+    ) external view returns (address mentor, address[] memory interns) {
         RaceSession storage session = sessions[sessionId];
         return (session.selectedMentor, session.selectedInterns);
     }
@@ -341,8 +456,12 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 count = 0;
         for (uint256 i = 0; i < sessionList.length; i++) {
             SessionStatus s = sessions[sessionList[i]].status;
-            if (s == SessionStatus.RACING || s == SessionStatus.PENDING || 
-               (s == SessionStatus.COMPLETED && sessions[sessionList[i]].seminarDate >= block.timestamp)) {
+            if (
+                s == SessionStatus.RACING ||
+                s == SessionStatus.PENDING ||
+                (s == SessionStatus.COMPLETED &&
+                    sessions[sessionList[i]].seminarDate >= block.timestamp)
+            ) {
                 count++;
             }
         }
@@ -351,8 +470,12 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 index = 0;
         for (uint256 i = 0; i < sessionList.length; i++) {
             SessionStatus s = sessions[sessionList[i]].status;
-            if (s == SessionStatus.RACING || s == SessionStatus.PENDING || 
-               (s == SessionStatus.COMPLETED && sessions[sessionList[i]].seminarDate >= block.timestamp)) {
+            if (
+                s == SessionStatus.RACING ||
+                s == SessionStatus.PENDING ||
+                (s == SessionStatus.COMPLETED &&
+                    sessions[sessionList[i]].seminarDate >= block.timestamp)
+            ) {
                 upcoming[index] = sessionList[i];
                 index++;
             }
@@ -364,7 +487,10 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 count = 0;
         for (uint256 i = 0; i < sessionList.length; i++) {
             SessionStatus s = sessions[sessionList[i]].status;
-            if (s == SessionStatus.COMPLETED && sessions[sessionList[i]].seminarDate < block.timestamp) {
+            if (
+                s == SessionStatus.COMPLETED &&
+                sessions[sessionList[i]].seminarDate < block.timestamp
+            ) {
                 count++;
             }
         }
@@ -373,7 +499,10 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 index = 0;
         for (uint256 i = 0; i < sessionList.length; i++) {
             SessionStatus s = sessions[sessionList[i]].status;
-            if (s == SessionStatus.COMPLETED && sessions[sessionList[i]].seminarDate < block.timestamp) {
+            if (
+                s == SessionStatus.COMPLETED &&
+                sessions[sessionList[i]].seminarDate < block.timestamp
+            ) {
                 past[index] = sessionList[i];
                 index++;
             }
@@ -381,18 +510,29 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         return past;
     }
 
-    function getRemainingInternPool(uint256 sessionId) external view returns (address[] memory) {
+    function getRemainingInternPool(
+        uint256 sessionId
+    ) external view returns (address[] memory) {
         return sessions[sessionId].internPool;
     }
 
-    function getFulltimePool(uint256 sessionId) external view returns (address[] memory) {
+    function getFulltimePool(
+        uint256 sessionId
+    ) external view returns (address[] memory) {
         return sessions[sessionId].fulltimePool;
     }
 
-    function isOnCooldown(address participant, uint256 targetWeekStart) external view returns (bool) {
+    function isOnCooldown(
+        address participant,
+        uint256 targetWeekStart
+    ) external view returns (bool) {
         uint256 weekDiff = 7 days;
-        uint256 previousWeekStart = targetWeekStart > weekDiff ? targetWeekStart - weekDiff : 0;
-        return lastChosenWeek[participant] == previousWeekStart && previousWeekStart != 0;
+        uint256 previousWeekStart = targetWeekStart > weekDiff
+            ? targetWeekStart - weekDiff
+            : 0;
+        return
+            lastChosenWeek[participant] == previousWeekStart &&
+            previousWeekStart != 0;
     }
 
     function getAllSessions() external view returns (uint256[] memory) {
