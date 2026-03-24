@@ -29,6 +29,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 preparationWeeks;
         uint256 requiredFulltimes;
         uint256 requiredInterns;
+        bytes32 sessionSeed;
         address[] internPool;
         address[] fulltimePool;
         address[] selectedFulltimes;
@@ -212,6 +213,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         session.preparationWeeks = defaultPreparationWeeks;
         session.requiredFulltimes = _reqFulltimes;
         session.requiredInterns = _reqInterns;
+        session.sessionSeed = keccak256(abi.encodePacked(block.prevrandao, sessionId));
 
         session.internPool = _filterCooldownParticipants(
             globalInternPool,
@@ -346,16 +348,15 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         session.currentRound++;
 
+        // Update seed every round
+        session.sessionSeed = keccak256(abi.encodePacked(session.sessionSeed, session.currentRound));
+
         address winner;
         ParticipantType pType;
 
         if (session.selectedFulltimes.length < session.requiredFulltimes) {
             require(session.fulltimePool.length > 0, "Empty fulltime pool");
-            uint256 randomIndex = _getRandomIndex(
-                sessionId,
-                session.currentRound,
-                session.fulltimePool.length
-            );
+            uint256 randomIndex = uint256(session.sessionSeed) % session.fulltimePool.length;
             winner = session.fulltimePool[randomIndex];
             session.selectedFulltimes.push(winner);
             pType = ParticipantType.FULLTIME;
@@ -367,11 +368,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
             session.fulltimePool.pop();
         } else {
             require(session.internPool.length > 0, "Empty intern pool");
-            uint256 randomIndex = _getRandomIndex(
-                sessionId,
-                session.currentRound,
-                session.internPool.length
-            );
+            uint256 randomIndex = uint256(session.sessionSeed) % session.internPool.length;
             winner = session.internPool[randomIndex];
             session.selectedInterns.push(winner);
             pType = ParticipantType.INTERN;
@@ -403,24 +400,6 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
                 session.selectedInterns
             );
         }
-    }
-
-    function _getRandomIndex(
-        uint256 sessionId,
-        uint256 round,
-        uint256 poolLength
-    ) internal view returns (uint256) {
-        return
-            uint256(
-                keccak256(
-                    abi.encodePacked(
-                        block.prevrandao,
-                        block.timestamp,
-                        sessionId,
-                        round
-                    )
-                )
-            ) % poolLength;
     }
 
     function _filterCooldownParticipants(

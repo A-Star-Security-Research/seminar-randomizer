@@ -5,7 +5,7 @@ import { ethers, BrowserProvider, Signer, Contract } from "ethers";
 // import SeminarRandomizerArtifact from "../artifacts/contracts/SeminarRandomizer.sol/SeminarRandomizer.json";
 // const ABI = SeminarRandomizerArtifact.abi;
 const ABI = [
-  "function getSession(uint256 sessionId) view returns (tuple(uint256 sessionId, uint8 status, uint256 createdAt, uint256 targetWeekStart, uint256 preparationWeeks, uint256 requiredFulltimes, uint256 requiredInterns, address[] internPool, address[] fulltimePool, address[] selectedFulltimes, address[] selectedInterns, uint256 currentRound, string seminarTitle, string seminarDescription, uint256 seminarDate))",
+  "function getSession(uint256 sessionId) view returns (tuple(uint256 sessionId, uint8 status, uint256 createdAt, uint256 targetWeekStart, uint256 preparationWeeks, uint256 requiredFulltimes, uint256 requiredInterns, bytes32 sessionSeed, address[] internPool, address[] fulltimePool, address[] selectedFulltimes, address[] selectedInterns, uint256 currentRound, string seminarTitle, string seminarDescription, uint256 seminarDate))",
   "function getSelectedTeam(uint256 sessionId) view returns (address[] fulltimes, address[] interns)",
   "function getUpcomingSessions() view returns (uint256[])",
   "function getPastSessions() view returns (uint256[])",
@@ -46,6 +46,7 @@ export interface RaceSession {
   preparationWeeks: bigint;
   requiredFulltimes: bigint;
   requiredInterns: bigint;
+  sessionSeed: string; // bytes32 hex string
   internPool: string[];
   fulltimePool: string[];
   selectedFulltimes: string[];
@@ -84,14 +85,15 @@ export class SeminarRandomizerService {
       preparationWeeks: session[4],
       requiredFulltimes: session[5],
       requiredInterns: session[6],
-      internPool: [...session[7]],
-      fulltimePool: [...session[8]],
-      selectedFulltimes: [...session[9]],
-      selectedInterns: [...session[10]],
-      currentRound: session[11],
-      seminarTitle: session[12],
-      seminarDescription: session[13],
-      seminarDate: session[14],
+      sessionSeed: session[7],
+      internPool: [...session[8]],
+      fulltimePool: [...session[9]],
+      selectedFulltimes: [...session[10]],
+      selectedInterns: [...session[11]],
+      currentRound: session[12],
+      seminarTitle: session[13],
+      seminarDescription: session[14],
+      seminarDate: session[15],
     };
   }
 
