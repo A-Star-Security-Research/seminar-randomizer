@@ -4,6 +4,8 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
+/// @title Speaker Manager Contract
+/// @notice Manages speakers and their assigned seminars
 contract SpeakerManager is Initializable, AccessControlUpgradeable {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -26,6 +28,8 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         _disableInitializers();
     }
 
+    /// @notice Initializes the contract and sets the default admin
+    /// @param defaultAdmin The address to be granted the DEFAULT_ADMIN_ROLE and ADMIN_ROLE
     function initialize(address defaultAdmin) initializer public {
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
@@ -37,6 +41,10 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         _;
     }
 
+    /// @notice Adds a new speaker to the manager
+    /// @dev Reverts if the speaker already exists
+    /// @param _speaker The address of the speaker
+    /// @param _name The name of the speaker
     function addSpeaker(address _speaker, string memory _name) external onlyAdmin {
         require(bytes(speakers[_speaker].name).length == 0, "SpeakerManager: speaker already exists");
         
@@ -47,6 +55,10 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         emit SpeakerAdded(_speaker, _name);
     }
 
+    /// @notice Updates the name of an existing speaker
+    /// @dev Reverts if the speaker does not exist
+    /// @param _speaker The address of the expected speaker
+    /// @param _name The new name for the speaker
     function updateSpeaker(address _speaker, string memory _name) external onlyAdmin {
         require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
         
@@ -55,6 +67,9 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         emit SpeakerUpdated(_speaker, _name);
     }
 
+    /// @notice Removes a speaker from the manager
+    /// @dev Reverts if the speaker does not exist
+    /// @param _speaker The address of the speaker to remove
     function removeSpeaker(address _speaker) external onlyAdmin {
         require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
         
@@ -73,20 +88,32 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         emit SpeakerRemoved(_speaker);
     }
 
+    /// @notice Links a seminar ID to a specific speaker
+    /// @dev Reverts if the speaker does not exist
+    /// @param _speaker The address of the speaker
+    /// @param _seminarId The ID of the seminar to add
     function addSeminarToSpeaker(address _speaker, uint256 _seminarId) external onlyAdmin {
         require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
         speakers[_speaker].seminarIds.push(_seminarId);
         emit SeminarAddedToSpeaker(_speaker, _seminarId);
     }
 
+    /// @notice Retrieves the details of a specific speaker
+    /// @param _speaker The address of the speaker
+    /// @return The Speaker struct containing their details
     function getSpeaker(address _speaker) external view returns (Speaker memory) {
         return speakers[_speaker];
     }
 
+    /// @notice Retrieves the list of all registered speaker addresses
+    /// @return An array of speaker addresses
     function getAllSpeakers() external view returns (address[] memory) {
         return speakerList;
     }
 
+    /// @notice Retrieves the list of seminar IDs assigned to a specific speaker
+    /// @param _speaker The address of the speaker
+    /// @return An array of seminar IDs
     function getSpeakerSeminars(address _speaker) external view returns (uint256[] memory) {
         return speakers[_speaker].seminarIds;
     }
