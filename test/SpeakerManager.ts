@@ -83,6 +83,21 @@ describe("SpeakerManager", function () {
       expect(seminars.length).to.equal(1);
       expect(seminars[0]).to.equal(seminarId);
     });
+
+    it("Should batch add and remove speakers", async function () {
+      const { speakerManager, speaker1, speaker2 } = await loadFixture(deploySpeakerManagerFixture);
+
+      await speakerManager.batchAddSpeakers(
+        [speaker1.address, speaker2.address],
+        ["Alice", "Bob"]
+      );
+      expect(await speakerManager.speakerExists(speaker1.address)).to.equal(true);
+      expect(await speakerManager.speakerExists(speaker2.address)).to.equal(true);
+
+      await speakerManager.batchRemoveSpeakers([speaker1.address, speaker2.address]);
+      expect(await speakerManager.speakerExists(speaker1.address)).to.equal(false);
+      expect(await speakerManager.speakerExists(speaker2.address)).to.equal(false);
+    });
   });
 
   describe("Access Control", function () {

@@ -69,6 +69,24 @@ describe("SeminarManager", function () {
       const seminarInfo = await seminarManager.getSeminar(1);
       expect(seminarInfo.slideLink).to.equal("new-link");
     });
+
+    it("Should update seminar speakers in batch", async function () {
+      const { seminarManager, speaker1 } = await loadFixture(deploySeminarManagerFixture);
+      const [, , speaker2, speaker3] = await hre.ethers.getSigners();
+
+      await seminarManager.createSeminar("Title", "Desc", "link", [speaker1.address]);
+      expect(await seminarManager.seminarExists(1)).to.equal(true);
+
+      await seminarManager.addSpeakersToSeminar(1, [speaker2.address, speaker3.address, speaker1.address]);
+      let seminarInfo = await seminarManager.getSeminar(1);
+      expect(seminarInfo.speakers).to.include(speaker1.address);
+      expect(seminarInfo.speakers).to.include(speaker2.address);
+      expect(seminarInfo.speakers).to.include(speaker3.address);
+
+      await seminarManager.removeSpeakersFromSeminar(1, [speaker2.address]);
+      seminarInfo = await seminarManager.getSeminar(1);
+      expect(seminarInfo.speakers).to.not.include(speaker2.address);
+    });
   });
 
   describe("Access Control", function () {

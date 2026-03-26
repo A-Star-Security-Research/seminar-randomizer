@@ -25,6 +25,7 @@ contract SeminarManager is Initializable, AccessControlUpgradeable {
     event SeminarCreated(uint256 indexed seminarId, string title, address[] speakers);
     event SeminarUpdated(uint256 indexed seminarId, string title);
     event SlideLinkUpdated(uint256 indexed seminarId, string slideLink);
+    event SeminarSpeakersUpdated(uint256 indexed seminarId, address[] speakers);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -96,6 +97,39 @@ contract SeminarManager is Initializable, AccessControlUpgradeable {
         emit SlideLinkUpdated(_seminarId, _slideLink);
     }
 
+    /// @notice Replaces the speaker list for a seminar
+    function setSeminarSpeakers(uint256 _seminarId, address[] memory _speakers) external onlyAdmin {
+        require(seminars[_seminarId].id != 0, "SeminarManager: seminar does not exist");
+        seminars[_seminarId].speakers = _speakers;
+        emit SeminarSpeakersUpdated(_seminarId, _speakers);
+    }
+
+    /// @notice Adds multiple speakers to a seminar if they are not already present
+    function addSpeakersToSeminar(uint256 _seminarId, address[] memory _speakers) external onlyAdmin {
+        require(seminars[_seminarId].id != 0, "SeminarManager: seminar does not exist");
+
+        Seminar storage s = seminars[_seminarId];
+        for (uint256 i = 0; i < _speakers.length; i++) {
+            if (!_containsAddress(s.speakers, _speakers[i])) {
+                s.speakers.push(_speakers[i]);
+            }
+        }
+
+        emit SeminarSpeakersUpdated(_seminarId, s.speakers);
+    }
+
+    /// @notice Removes multiple speakers from a seminar
+    function removeSpeakersFromSeminar(uint256 _seminarId, address[] memory _speakers) external onlyAdmin {
+        require(seminars[_seminarId].id != 0, "SeminarManager: seminar does not exist");
+
+        Seminar storage s = seminars[_seminarId];
+        for (uint256 i = 0; i < _speakers.length; i++) {
+            _removeAddress(s.speakers, _speakers[i]);
+        }
+
+        emit SeminarSpeakersUpdated(_seminarId, s.speakers);
+    }
+
     /// @notice Retrieves the full details of a seminar
     /// @param _seminarId The ID of the seminar
     /// @return The Seminar struct details
@@ -103,9 +137,33 @@ contract SeminarManager is Initializable, AccessControlUpgradeable {
         return seminars[_seminarId];
     }
 
+    /// @notice Checks if a seminar exists
+    function seminarExists(uint256 _seminarId) external view returns (bool) {
+        return seminars[_seminarId].id != 0;
+    }
+
     /// @notice Retrieves the list of all created seminar IDs
     /// @return An array of seminar IDs
     function getAllSeminars() external view returns (uint256[] memory) {
         return seminarList;
+    }
+
+    function _containsAddress(address[] storage values, address value) internal view returns (bool) {
+        for (uint256 i = 0; i < values.length; i++) {
+            if (values[i] == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _removeAddress(address[] storage values, address value) internal {
+        for (uint256 i = 0; i < values.length; i++) {
+            if (values[i] == value) {
+                values[i] = values[values.length - 1];
+                values.pop();
+                break;
+            }
+        }
     }
 }

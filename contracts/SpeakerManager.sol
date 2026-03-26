@@ -46,13 +46,17 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
     /// @param _speaker The address of the speaker
     /// @param _name The name of the speaker
     function addSpeaker(address _speaker, string memory _name) external onlyAdmin {
-        require(bytes(speakers[_speaker].name).length == 0, "SpeakerManager: speaker already exists");
-        
-        speakers[_speaker].name = _name;
-        speakers[_speaker].speakerAddress = _speaker;
-        speakerList.push(_speaker);
+        _addSpeaker(_speaker, _name);
+    }
 
-        emit SpeakerAdded(_speaker, _name);
+    /// @notice Adds multiple speakers in one transaction
+    /// @param _speakers The addresses of speakers
+    /// @param _names The corresponding speaker names
+    function batchAddSpeakers(address[] memory _speakers, string[] memory _names) external onlyAdmin {
+        require(_speakers.length == _names.length, "SpeakerManager: length mismatch");
+        for (uint256 i = 0; i < _speakers.length; i++) {
+            _addSpeaker(_speakers[i], _names[i]);
+        }
     }
 
     /// @notice Updates the name of an existing speaker
@@ -61,7 +65,7 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
     /// @param _name The new name for the speaker
     function updateSpeaker(address _speaker, string memory _name) external onlyAdmin {
         require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
-        
+
         speakers[_speaker].name = _name;
 
         emit SpeakerUpdated(_speaker, _name);
@@ -71,21 +75,15 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
     /// @dev Reverts if the speaker does not exist
     /// @param _speaker The address of the speaker to remove
     function removeSpeaker(address _speaker) external onlyAdmin {
-        require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
-        
-        delete speakers[_speaker];
+        _removeSpeaker(_speaker);
+    }
 
-        // Remove from list
-        for (uint256 i = 0; i < speakerList.length; i++) {
-            if (speakerList[i] == _speaker) {
-                // Swap and pop
-                speakerList[i] = speakerList[speakerList.length - 1];
-                speakerList.pop();
-                break;
-            }
+    /// @notice Removes multiple speakers in one transaction
+    /// @param _speakers The speaker addresses to remove
+    function batchRemoveSpeakers(address[] memory _speakers) external onlyAdmin {
+        for (uint256 i = 0; i < _speakers.length; i++) {
+            _removeSpeaker(_speakers[i]);
         }
-
-        emit SpeakerRemoved(_speaker);
     }
 
     /// @notice Links a seminar ID to a specific speaker
@@ -105,6 +103,11 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
         return speakers[_speaker];
     }
 
+    /// @notice Checks whether a speaker exists
+    function speakerExists(address _speaker) external view returns (bool) {
+        return bytes(speakers[_speaker].name).length > 0;
+    }
+
     /// @notice Retrieves the list of all registered speaker addresses
     /// @return An array of speaker addresses
     function getAllSpeakers() external view returns (address[] memory) {
@@ -116,5 +119,35 @@ contract SpeakerManager is Initializable, AccessControlUpgradeable {
     /// @return An array of seminar IDs
     function getSpeakerSeminars(address _speaker) external view returns (uint256[] memory) {
         return speakers[_speaker].seminarIds;
+    }
+
+    function _addSpeaker(address _speaker, string memory _name) internal {
+        require(_speaker != address(0), "SpeakerManager: zero address");
+        require(bytes(_name).length > 0, "SpeakerManager: empty name");
+        require(bytes(speakers[_speaker].name).length == 0, "SpeakerManager: speaker already exists");
+
+        speakers[_speaker].name = _name;
+        speakers[_speaker].speakerAddress = _speaker;
+        speakerList.push(_speaker);
+
+        emit SpeakerAdded(_speaker, _name);
+    }
+
+    function _removeSpeaker(address _speaker) internal {
+        require(bytes(speakers[_speaker].name).length > 0, "SpeakerManager: speaker does not exist");
+
+        delete speakers[_speaker];
+
+        // Remove from list
+        for (uint256 i = 0; i < speakerList.length; i++) {
+            if (speakerList[i] == _speaker) {
+                // Swap and pop
+                speakerList[i] = speakerList[speakerList.length - 1];
+                speakerList.pop();
+                break;
+            }
+        }
+
+        emit SpeakerRemoved(_speaker);
     }
 }

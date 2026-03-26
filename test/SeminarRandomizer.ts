@@ -3,7 +3,15 @@ import {
   loadFixture,
 } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
-import hre, { network } from "hardhat";
+import hre from "hardhat";
+
+function getMondayStart(ts: number): number {
+  const day = Math.floor(ts / 86400);
+  const dayOfWeek = (day + 4) % 7;
+  const offsetDaysFromMonday = (dayOfWeek + 6) % 7;
+  const startOfDay = ts - (ts % 86400);
+  return startOfDay - offsetDaysFromMonday * 86400;
+}
 
 describe("SeminarRandomizer", function () {
   async function deployRandomizerFixture() {
@@ -257,6 +265,61 @@ describe("SeminarRandomizer", function () {
       const team = await randomizer.getSelectedTeam(1);
       expect(team.fulltimes.length).to.equal(2);
       expect(team.interns.length).to.equal(2);
+    });
+  });
+
+  describe("Week Scheduling and Sources", function () {
+    it("Should create a session for an explicit week", async function () {
+      const { randomizer, admin } = await loadFixture(deployRandomizerFixture);
+      const now = await time.latest();
+      const baseMonday = getMondayStart(Number(now));
+      const week1 = baseMonday + 7 * 24 * 60 * 60;
+
+      await randomizer.connect(admin).createRaceSessionForWeek(
+        0,
+        week1,
+        1,
+        3,
+        false
+      );
+
+      const s1 = await randomizer.getSession(1);
+      expect(Number(s1.targetWeekStart)).to.equal(week1);
+    });
+
+    it("Should validate participants against SpeakerManager when source contracts are set", async function () {
+      const { randomizer, admin, speakerManager, seminarManager } = await loadFixture(deployRandomizerFixture);
+      const [, , , , , , , , , outsider] = await hre.ethers.getSigners();
+
+      await randomizer.connect(admin).setSourceContracts(
+        await speakerManager.getAddress(),
+        await seminarManager.getAddress()
+      );
+
+      await expect(
+        randomizer.connect(admin).addParticipant(outsider.address, "Outsider", 0)
+      ).to.be.revertedWith("Unknown speaker");
+
+      await speakerManager.connect(admin).addSpeaker(outsider.address, "Outsider");
+      await randomizer.connect(admin).addParticipant(outsider.address, "Outsider", 0);
+    });
+
+    it("Should allow admin to manually override selected team", async function () {
+      const { randomizer, admin, mentor1, intern1, intern2, intern3 } = await loadFixture(deployRandomizerFixture);
+      await randomizer.connect(admin).createRaceSession(1, 3);
+
+      await randomizer.connect(admin).setSelectedTeam(
+        1,
+        [mentor1.address],
+        [intern1.address, intern2.address, intern3.address],
+        true
+      );
+
+      const session = await randomizer.getSession(1);
+      expect(session.status).to.equal(2);
+      const team = await randomizer.getSelectedTeam(1);
+      expect(team.fulltimes[0]).to.equal(mentor1.address);
+      expect(team.interns).to.deep.equal([intern1.address, intern2.address, intern3.address]);
     });
   });
 });

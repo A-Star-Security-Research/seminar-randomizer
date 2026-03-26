@@ -4,8 +4,16 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
+interface ISpeakerManager {
+    function speakerExists(address _speaker) external view returns (bool);
+}
+
+interface ISeminarManager {
+    function seminarExists(uint256 _seminarId) external view returns (bool);
+}
+
 /// @title Seminar Randomizer Contract
-/// @notice Manages the participant pools, randomized racing/picking logic, and sessions for seminars
+/// @notice Manages participant pools, randomized pick logic, and week-based seminar sessions
 contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -13,6 +21,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         INTERN,
         FULLTIME
     }
+
     enum SessionStatus {
         PENDING,
         RACING,
@@ -38,6 +47,8 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         string seminarTitle;
         string seminarDescription;
         uint256 seminarDate;
+        uint256 seminarId;
+        bool usedCooldownFallback;
     }
 
     mapping(uint256 => RaceSession) public sessions;
@@ -52,6 +63,9 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     mapping(address => uint256) public lastChosenWeek;
     uint256 public defaultPreparationWeeks;
 
+    address public speakerManager;
+    address public seminarManager;
+
     event RaceSessionCreated(
         uint256 indexed sessionId,
         uint256 targetWeekStart,
@@ -62,6 +76,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     event SessionPaused(uint256 indexed sessionId);
     event SessionResumed(uint256 indexed sessionId);
     event SessionCancelled(uint256 indexed sessionId);
+    event SessionWeekUpdated(uint256 indexed sessionId, uint256 previousWeekStart, uint256 newWeekStart);
     event RaceResult(
         uint256 indexed sessionId,
         uint256 round,
@@ -88,6 +103,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     event ParticipantRemoved(address indexed participant);
     event InternPoolUpdated(uint256 count);
     event FulltimePoolUpdated(uint256 count);
+    event SourceContractsUpdated(address indexed speakerManager, address indexed seminarManager);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -112,6 +128,16 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         _;
     }
 
+    // ── Admin Functions — Cross-Contract Sources ──
+
+    /// @notice Sets source contracts used for cross-reference checks
+    /// @dev Set address(0) to disable a source check temporarily
+    function setSourceContracts(address _speakerManager, address _seminarManager) external onlyAdmin {
+        speakerManager = _speakerManager;
+        seminarManager = _seminarManager;
+        emit SourceContractsUpdated(_speakerManager, _seminarManager);
+    }
+
     // ── Admin Functions — Pool Management ──
 
     /// @notice Adds a new participant to the respective pool
@@ -124,45 +150,35 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         string memory _name,
         ParticipantType _pType
     ) external onlyAdmin {
-        require(
-            bytes(participantNames[_participant]).length == 0,
-            "Participant already exists"
-        );
-        participantNames[_participant] = _name;
-        participantTypes[_participant] = _pType;
+        _addParticipant(_participant, _name, _pType);
+    }
 
-        if (_pType == ParticipantType.INTERN) {
-            globalInternPool.push(_participant);
-            emit InternPoolUpdated(globalInternPool.length);
-        } else {
-            globalFulltimePool.push(_participant);
-            emit FulltimePoolUpdated(globalFulltimePool.length);
+    /// @notice Adds multiple participants in one transaction
+    function batchAddParticipants(
+        address[] memory _participants,
+        string[] memory _names,
+        ParticipantType[] memory _types
+    ) external onlyAdmin {
+        require(_participants.length == _names.length, "Length mismatch");
+        require(_participants.length == _types.length, "Length mismatch");
+
+        for (uint256 i = 0; i < _participants.length; i++) {
+            _addParticipant(_participants[i], _names[i], _types[i]);
         }
-
-        emit ParticipantAdded(_participant, _name, _pType);
     }
 
     /// @notice Removes an existing participant from the system
     /// @dev Reverts if the participant does not exist
     /// @param _participant The address of the participant to remove
     function removeParticipant(address _participant) external onlyAdmin {
-        require(
-            bytes(participantNames[_participant]).length > 0,
-            "Participant does not exist"
-        );
+        _removeParticipant(_participant);
+    }
 
-        ParticipantType pType = participantTypes[_participant];
-        delete participantNames[_participant];
-
-        if (pType == ParticipantType.INTERN) {
-            _removeFromPool(globalInternPool, _participant);
-            emit InternPoolUpdated(globalInternPool.length);
-        } else {
-            _removeFromPool(globalFulltimePool, _participant);
-            emit FulltimePoolUpdated(globalFulltimePool.length);
+    /// @notice Removes multiple participants in one transaction
+    function batchRemoveParticipants(address[] memory _participants) external onlyAdmin {
+        for (uint256 i = 0; i < _participants.length; i++) {
+            _removeParticipant(_participants[i]);
         }
-
-        emit ParticipantRemoved(_participant);
     }
 
     /// @notice Sets a completely new list for the global intern pool
@@ -191,11 +207,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     // ── Admin Functions — Session Management ──
 
-    /// @notice Creates a new race session for selecting a configurable team structure
-    /// @dev Filters out participants who are on cooldown directly into the session pool
-    /// @param _reqFulltimes The number of full-time mentors required
-    /// @param _reqInterns The number of interns required
-    /// @return sessionId The ID of the newly created session
+    /// @notice Creates a new race session with default scheduling
     function createRaceSession(
         uint256 _reqFulltimes,
         uint256 _reqInterns
@@ -203,46 +215,67 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         uint256 targetTimestamp = block.timestamp + (defaultPreparationWeeks * 1 weeks);
         uint256 targetWeekStart = _getMonday(targetTimestamp);
 
-        sessionId = nextSessionId++;
+        return _createRaceSession(0, targetWeekStart, _reqFulltimes, _reqInterns, false, defaultPreparationWeeks);
+    }
+
+    /// @notice Creates a race session for an explicit week and seminar
+    function createRaceSessionForWeek(
+        uint256 _seminarId,
+        uint256 _targetWeekStart,
+        uint256 _reqFulltimes,
+        uint256 _reqInterns,
+        bool _allowCooldownFallback
+    ) external onlyAdmin returns (uint256 sessionId) {
+        require(_isMondayStart(_targetWeekStart), "Week must be Monday 00:00 UTC");
+        return _createRaceSession(
+            _seminarId,
+            _targetWeekStart,
+            _reqFulltimes,
+            _reqInterns,
+            _allowCooldownFallback,
+            defaultPreparationWeeks
+        );
+    }
+
+    /// @notice Updates a pending session target week and refreshes candidate pools
+    function updateSessionWeek(
+        uint256 sessionId,
+        uint256 _newWeekStart,
+        bool _allowCooldownFallback
+    ) external onlyAdmin {
+        require(_isMondayStart(_newWeekStart), "Week must be Monday 00:00 UTC");
 
         RaceSession storage session = sessions[sessionId];
-        session.sessionId = sessionId;
-        session.status = SessionStatus.PENDING;
-        session.createdAt = block.timestamp;
-        session.targetWeekStart = targetWeekStart;
-        session.preparationWeeks = defaultPreparationWeeks;
-        session.requiredFulltimes = _reqFulltimes;
-        session.requiredInterns = _reqInterns;
-        session.sessionSeed = keccak256(abi.encodePacked(block.prevrandao, sessionId));
+        require(session.sessionId != 0, "Session does not exist");
+        require(session.status == SessionStatus.PENDING, "Only pending session");
 
-        session.internPool = _filterCooldownParticipants(
-            globalInternPool,
-            targetWeekStart
-        );
-        session.fulltimePool = _filterCooldownParticipants(
-            globalFulltimePool,
-            targetWeekStart
-        );
+        uint256 previousWeekStart = session.targetWeekStart;
+        session.targetWeekStart = _newWeekStart;
+        session.internPool = _filterCooldownParticipants(globalInternPool, _newWeekStart);
+        session.fulltimePool = _filterCooldownParticipants(globalFulltimePool, _newWeekStart);
+        session.usedCooldownFallback = false;
+
+        if (_allowCooldownFallback) {
+            if (session.fulltimePool.length < session.requiredFulltimes) {
+                session.fulltimePool = globalFulltimePool;
+                session.usedCooldownFallback = true;
+            }
+            if (session.internPool.length < session.requiredInterns) {
+                session.internPool = globalInternPool;
+                session.usedCooldownFallback = true;
+            }
+        }
 
         require(
-            session.fulltimePool.length >= _reqFulltimes,
+            session.fulltimePool.length >= session.requiredFulltimes,
             "Not enough full-time members"
         );
-
         require(
-            session.internPool.length >= _reqInterns,
+            session.internPool.length >= session.requiredInterns,
             "Not enough intern members"
         );
 
-        sessionList.push(sessionId);
-
-        emit RaceSessionCreated(
-            sessionId,
-            targetWeekStart,
-            session.preparationWeeks,
-            _reqFulltimes,
-            _reqInterns
-        );
+        emit SessionWeekUpdated(sessionId, previousWeekStart, _newWeekStart);
     }
 
     /// @notice Updates the allotted preparation weeks for an existing session
@@ -261,6 +294,34 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
     /// @param _weeks The new default preparation duration
     function setDefaultPreparationWeeks(uint256 _weeks) external onlyAdmin {
         defaultPreparationWeeks = _weeks;
+    }
+
+    /// @notice Manually sets/overwrites a selected team for a session
+    /// @dev Useful for UI-driven edits when availability changes
+    function setSelectedTeam(
+        uint256 sessionId,
+        address[] memory _fulltimes,
+        address[] memory _interns,
+        bool _ignoreCooldownCheck
+    ) external onlyAdmin {
+        RaceSession storage session = sessions[sessionId];
+        require(session.sessionId != 0, "Session does not exist");
+        require(session.status != SessionStatus.CANCELLED, "Session cancelled");
+        require(_fulltimes.length == session.requiredFulltimes, "Invalid fulltime count");
+        require(_interns.length == session.requiredInterns, "Invalid intern count");
+
+        _validateTeam(_fulltimes, _interns, session.targetWeekStart, _ignoreCooldownCheck);
+
+        _clearSessionCooldown(session);
+
+        session.selectedFulltimes = _fulltimes;
+        session.selectedInterns = _interns;
+        session.currentRound = session.requiredFulltimes + session.requiredInterns;
+        session.status = SessionStatus.COMPLETED;
+
+        _applySessionCooldown(session);
+
+        emit SessionCompleted(sessionId, session.selectedFulltimes, session.selectedInterns);
     }
 
     /// @notice Pauses an ongoing or completed session
@@ -303,23 +364,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         RaceSession storage session = sessions[sessionId];
         require(session.status != SessionStatus.CANCELLED, "Already cancelled");
 
-        // Reset cooldowns
-        for (uint256 i = 0; i < session.selectedFulltimes.length; i++) {
-            if (
-                lastChosenWeek[session.selectedFulltimes[i]] ==
-                session.targetWeekStart
-            ) {
-                lastChosenWeek[session.selectedFulltimes[i]] = 0;
-            }
-        }
-        for (uint256 i = 0; i < session.selectedInterns.length; i++) {
-            if (
-                lastChosenWeek[session.selectedInterns[i]] ==
-                session.targetWeekStart
-            ) {
-                lastChosenWeek[session.selectedInterns[i]] = 0;
-            }
-        }
+        _clearSessionCooldown(session);
 
         session.status = SessionStatus.CANCELLED;
         emit SessionCancelled(sessionId);
@@ -327,8 +372,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
     // ── Race Functions — Randomization ──
 
-    /// @notice Start the next round of a seminar duck race
-    /// @dev Requires the session to be PENDING or RACING. Randomization handled pseudo-randomly. Total rounds depend on required configurations and set cooldowns for chosen users upon completion.
+    /// @notice Start the next round of a seminar race
     /// @param sessionId The ID of the session to run the race for
     function startNextRace(uint256 sessionId) external onlyAdmin {
         RaceSession storage session = sessions[sessionId];
@@ -384,15 +428,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         if (session.selectedFulltimes.length == session.requiredFulltimes && session.selectedInterns.length == session.requiredInterns) {
             session.status = SessionStatus.COMPLETED;
-
-            // Set cooldown
-            for (uint256 i = 0; i < session.selectedFulltimes.length; i++) {
-                lastChosenWeek[session.selectedFulltimes[i]] = session.targetWeekStart;
-            }
-            for (uint256 i = 0; i < session.selectedInterns.length; i++) {
-                lastChosenWeek[session.selectedInterns[i]] = session
-                    .targetWeekStart;
-            }
+            _applySessionCooldown(session);
 
             emit SessionCompleted(
                 sessionId,
@@ -400,6 +436,74 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
                 session.selectedInterns
             );
         }
+    }
+
+    function _createRaceSession(
+        uint256 _seminarId,
+        uint256 _targetWeekStart,
+        uint256 _reqFulltimes,
+        uint256 _reqInterns,
+        bool _allowCooldownFallback,
+        uint256 _preparationWeeks
+    ) internal returns (uint256 sessionId) {
+        require(_reqFulltimes > 0 || _reqInterns > 0, "Invalid requirements");
+        if (seminarManager != address(0) && _seminarId != 0) {
+            require(ISeminarManager(seminarManager).seminarExists(_seminarId), "Unknown seminar");
+        }
+
+        sessionId = nextSessionId++;
+
+        RaceSession storage session = sessions[sessionId];
+        session.sessionId = sessionId;
+        session.status = SessionStatus.PENDING;
+        session.createdAt = block.timestamp;
+        session.targetWeekStart = _targetWeekStart;
+        session.preparationWeeks = _preparationWeeks;
+        session.requiredFulltimes = _reqFulltimes;
+        session.requiredInterns = _reqInterns;
+        session.sessionSeed = keccak256(abi.encodePacked(block.prevrandao, sessionId));
+        session.seminarId = _seminarId;
+        session.usedCooldownFallback = false;
+
+        session.internPool = _filterCooldownParticipants(
+            globalInternPool,
+            _targetWeekStart
+        );
+        session.fulltimePool = _filterCooldownParticipants(
+            globalFulltimePool,
+            _targetWeekStart
+        );
+
+        if (_allowCooldownFallback) {
+            if (session.fulltimePool.length < _reqFulltimes) {
+                session.fulltimePool = globalFulltimePool;
+                session.usedCooldownFallback = true;
+            }
+            if (session.internPool.length < _reqInterns) {
+                session.internPool = globalInternPool;
+                session.usedCooldownFallback = true;
+            }
+        }
+
+        require(
+            session.fulltimePool.length >= _reqFulltimes,
+            "Not enough full-time members"
+        );
+
+        require(
+            session.internPool.length >= _reqInterns,
+            "Not enough intern members"
+        );
+
+        sessionList.push(sessionId);
+
+        emit RaceSessionCreated(
+            sessionId,
+            _targetWeekStart,
+            session.preparationWeeks,
+            _reqFulltimes,
+            _reqInterns
+        );
     }
 
     function _filterCooldownParticipants(
@@ -441,6 +545,163 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
                 pool.pop();
                 break;
             }
+        }
+    }
+
+    function _contains(address[] storage pool, address participant) internal view returns (bool) {
+        for (uint256 i = 0; i < pool.length; i++) {
+            if (pool[i] == participant) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _addParticipant(
+        address _participant,
+        string memory _name,
+        ParticipantType _pType
+    ) internal {
+        require(_participant != address(0), "Invalid participant");
+        require(bytes(_name).length > 0, "Empty name");
+        require(
+            bytes(participantNames[_participant]).length == 0,
+            "Participant already exists"
+        );
+        if (speakerManager != address(0)) {
+            require(ISpeakerManager(speakerManager).speakerExists(_participant), "Unknown speaker");
+        }
+
+        participantNames[_participant] = _name;
+        participantTypes[_participant] = _pType;
+
+        if (_pType == ParticipantType.INTERN) {
+            globalInternPool.push(_participant);
+            emit InternPoolUpdated(globalInternPool.length);
+        } else {
+            globalFulltimePool.push(_participant);
+            emit FulltimePoolUpdated(globalFulltimePool.length);
+        }
+
+        emit ParticipantAdded(_participant, _name, _pType);
+    }
+
+    function _removeParticipant(address _participant) internal {
+        require(
+            bytes(participantNames[_participant]).length > 0,
+            "Participant does not exist"
+        );
+
+        ParticipantType pType = participantTypes[_participant];
+        delete participantNames[_participant];
+        delete participantTypes[_participant];
+
+        if (pType == ParticipantType.INTERN) {
+            _removeFromPool(globalInternPool, _participant);
+            emit InternPoolUpdated(globalInternPool.length);
+        } else {
+            _removeFromPool(globalFulltimePool, _participant);
+            emit FulltimePoolUpdated(globalFulltimePool.length);
+        }
+
+        emit ParticipantRemoved(_participant);
+    }
+
+    function _validateTeam(
+        address[] memory _fulltimes,
+        address[] memory _interns,
+        uint256 _targetWeekStart,
+        bool _ignoreCooldownCheck
+    ) internal view {
+        for (uint256 i = 0; i < _fulltimes.length; i++) {
+            _validateParticipantForTeam(
+                _fulltimes[i],
+                ParticipantType.FULLTIME,
+                _targetWeekStart,
+                _ignoreCooldownCheck
+            );
+            require(!_hasDuplicateInTail(_fulltimes, i), "Duplicate fulltime");
+            require(!_existsInArray(_interns, _fulltimes[i]), "Duplicate participant");
+        }
+
+        for (uint256 i = 0; i < _interns.length; i++) {
+            _validateParticipantForTeam(
+                _interns[i],
+                ParticipantType.INTERN,
+                _targetWeekStart,
+                _ignoreCooldownCheck
+            );
+            require(!_hasDuplicateInTail(_interns, i), "Duplicate intern");
+        }
+    }
+
+    function _validateParticipantForTeam(
+        address member,
+        ParticipantType expectedType,
+        uint256 targetWeekStart,
+        bool ignoreCooldownCheck
+    ) internal view {
+        require(bytes(participantNames[member]).length > 0, "Unknown participant");
+        require(participantTypes[member] == expectedType, "Type mismatch");
+        if (expectedType == ParticipantType.FULLTIME) {
+            require(_contains(globalFulltimePool, member), "Not in fulltime pool");
+        } else {
+            require(_contains(globalInternPool, member), "Not in intern pool");
+        }
+        if (!ignoreCooldownCheck) {
+            require(!_isOnCooldownForWeek(member, targetWeekStart), "Participant on cooldown");
+        }
+    }
+
+    function _hasDuplicateInTail(
+        address[] memory values,
+        uint256 index
+    ) internal pure returns (bool) {
+        for (uint256 j = index + 1; j < values.length; j++) {
+            if (values[j] == values[index]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _existsInArray(
+        address[] memory values,
+        address value
+    ) internal pure returns (bool) {
+        for (uint256 i = 0; i < values.length; i++) {
+            if (values[i] == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _clearSessionCooldown(RaceSession storage session) internal {
+        for (uint256 i = 0; i < session.selectedFulltimes.length; i++) {
+            if (
+                lastChosenWeek[session.selectedFulltimes[i]] ==
+                session.targetWeekStart
+            ) {
+                lastChosenWeek[session.selectedFulltimes[i]] = 0;
+            }
+        }
+        for (uint256 i = 0; i < session.selectedInterns.length; i++) {
+            if (
+                lastChosenWeek[session.selectedInterns[i]] ==
+                session.targetWeekStart
+            ) {
+                lastChosenWeek[session.selectedInterns[i]] = 0;
+            }
+        }
+    }
+
+    function _applySessionCooldown(RaceSession storage session) internal {
+        for (uint256 i = 0; i < session.selectedFulltimes.length; i++) {
+            lastChosenWeek[session.selectedFulltimes[i]] = session.targetWeekStart;
+        }
+        for (uint256 i = 0; i < session.selectedInterns.length; i++) {
+            lastChosenWeek[session.selectedInterns[i]] = session.targetWeekStart;
         }
     }
 
@@ -492,13 +753,30 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
 
         return false;
     }
-    
+
     function _getMonday(uint256 t) internal pure returns (uint256) {
         uint256 daysSinceEpoch = t / 86400; // 0 = Thursday
         uint256 dayOfWeek = (daysSinceEpoch + 4) % 7; // 0 = Sunday, 1 = Monday
         uint256 offsetDaysFromMonday = (dayOfWeek + 6) % 7;
         uint256 startOfDay = t - (t % 86400);
         return startOfDay - (offsetDaysFromMonday * 86400);
+    }
+
+    function _isMondayStart(uint256 t) internal pure returns (bool) {
+        return _getMonday(t) == t;
+    }
+
+    function _isOnCooldownForWeek(
+        address participant,
+        uint256 targetWeekStart
+    ) internal view returns (bool) {
+        uint256 weekDiff = 7 days;
+        uint256 previousWeekStart = targetWeekStart > weekDiff
+            ? targetWeekStart - weekDiff
+            : 0;
+        return
+            lastChosenWeek[participant] == previousWeekStart &&
+            previousWeekStart != 0;
     }
 
     // ── View Functions ──
@@ -613,13 +891,7 @@ contract SeminarRandomizer is Initializable, AccessControlUpgradeable {
         address participant,
         uint256 targetWeekStart
     ) external view returns (bool) {
-        uint256 weekDiff = 7 days;
-        uint256 previousWeekStart = targetWeekStart > weekDiff
-            ? targetWeekStart - weekDiff
-            : 0;
-        return
-            lastChosenWeek[participant] == previousWeekStart &&
-            previousWeekStart != 0;
+        return _isOnCooldownForWeek(participant, targetWeekStart);
     }
 
     /// @notice Gets all ever-created or registered session IDs globally
